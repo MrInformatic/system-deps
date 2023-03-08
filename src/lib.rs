@@ -300,7 +300,13 @@ impl Dependencies {
         v
     }
 
-    fn aggregate_path_buf<F: Fn(&Library) -> &Vec<PathBuf>>(&self, getter: F) -> Vec<&PathBuf> {
+    fn aggregate_generic<'a, I: IntoIterator, F: FnMut(&'a Library) -> I>(
+        &'a self,
+        getter: F,
+    ) -> Vec<I::Item>
+    where
+        I::Item: Ord,
+    {
         let mut v = self.libs.values().flat_map(getter).collect::<Vec<_>>();
         v.sort();
         v.dedup();
@@ -321,7 +327,7 @@ impl Dependencies {
 
     /// Returns a vector of [Library::link_paths] of each library, removing duplicates.
     pub fn all_link_paths(&self) -> Vec<&PathBuf> {
-        self.aggregate_path_buf(|l| &l.link_paths)
+        self.aggregate_generic(|l| &l.link_paths)
     }
 
     /// Returns a vector of [Library::frameworks] of each library, removing duplicates.
@@ -331,12 +337,17 @@ impl Dependencies {
 
     /// Returns a vector of [Library::framework_paths] of each library, removing duplicates.
     pub fn all_framework_paths(&self) -> Vec<&PathBuf> {
-        self.aggregate_path_buf(|l| &l.framework_paths)
+        self.aggregate_generic(|l| &l.framework_paths)
     }
 
     /// Returns a vector of [Library::include_paths] of each library, removing duplicates.
     pub fn all_include_paths(&self) -> Vec<&PathBuf> {
-        self.aggregate_path_buf(|l| &l.include_paths)
+        self.aggregate_generic(|l| &l.include_paths)
+    }
+
+    /// Returns a vector of [Library::ld_args] of each library, removing duplicates.
+    pub fn all_linker_args(&self) -> Vec<&Vec<String>> {
+        self.aggregate_generic(|l| &l.linker_args)
     }
 
     /// Returns a vector of [Library::defines] of each library, removing duplicates.
@@ -408,6 +419,9 @@ impl Dependencies {
             lib.frameworks
                 .iter()
                 .for_each(|f| flags.add(BuildFlag::LibFramework(f.clone())));
+            lib.linker_args
+                .iter()
+                .for_each(|a| flags.add(BuildFlag::LinkerArgs(a.clone())));
         }
 
         // Export DEP_$CRATE_INCLUDE env variable with the headers paths,
@@ -860,6 +874,8 @@ pub struct Library {
     pub framework_paths: Vec<PathBuf>,
     /// directories where the compiler should look for header files
     pub include_paths: Vec<PathBuf>,
+    /// Linker options specified by -Wl
+    pub linker_args: Vec<Vec<String>>,
     /// macros that should be defined by the compiler
     pub defines: HashMap<String, Option<String>>,
     /// library version
@@ -909,6 +925,7 @@ impl Library {
             include_paths: l.include_paths,
             frameworks: l.frameworks,
             framework_paths: l.framework_paths,
+            linker_args: l.ld_args,
             defines: l.defines,
             version: l.version,
             statik: false,
@@ -924,6 +941,7 @@ impl Library {
             include_paths: Vec::new(),
             frameworks: Vec::new(),
             framework_paths: Vec::new(),
+            linker_args: Vec::new(),
             defines: HashMap::new(),
             version: String::new(),
             statik: false,
@@ -1040,6 +1058,7 @@ enum BuildFlag {
     SearchFramework(String),
     Lib(String, bool), // true if static
     LibFramework(String),
+    LinkerArgs(Vec<String>),
     RerunIfEnvChanged(EnvVariable),
 }
 
@@ -1057,6 +1076,7 @@ impl fmt::Display for BuildFlag {
                 }
             }
             BuildFlag::LibFramework(lib) => write!(f, "rustc-link-lib=framework={}", lib),
+            BuildFlag::LinkerArgs(args) => write!(f, "rustc-link-arg=-Wl,{}", args.join(",")),
             BuildFlag::RerunIfEnvChanged(env) => write!(f, "rerun-if-env-changed={}", env),
         }
     }
